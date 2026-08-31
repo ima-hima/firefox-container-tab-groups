@@ -487,6 +487,7 @@ async function persistRules(next) {
 
 const MENU_ASSIGN = "ctg-assign";
 const MENU_UNASSIGN = "ctg-unassign";
+const MENU_DECONTAIN = "ctg-decontain";
 const MENU_REGROUP = "ctg-regroup";
 
 function domainRuleFor(host) {
@@ -536,6 +537,12 @@ async function buildMenus() {
     contexts: ["tab"],
   });
   browser.menus.create({
+    id: MENU_DECONTAIN,
+    title: "Reopen tab without a container",
+    contexts: ["tab"],
+    visible: false,
+  });
+  browser.menus.create({
     id: MENU_REGROUP,
     title: "Move tab to its container’s group",
     contexts: ["tab"],
@@ -566,6 +573,10 @@ browser.menus.onShown.addListener(async (info, tab) => {
         ? `Stop opening “${host}” in a container`
         : "Stop opening this site in a container",
     });
+
+    await browser.menus.update(MENU_DECONTAIN, {
+      visible: store !== DEFAULT_STORE && !store.startsWith("firefox-private"),
+    });
   } catch {
     // Menu items briefly out of sync (event page just woke, container just
     // added/removed). buildMenus() will rebuild; nothing to do here.
@@ -581,6 +592,11 @@ browser.menus.onClicked.addListener((info, tab) => {
 
   if (id === MENU_REGROUP) {
     serialize(() => placeTab(tab.id));
+    return;
+  }
+
+  if (id === MENU_DECONTAIN) {
+    serialize(() => reopenInContainer(tab, DEFAULT_STORE));
     return;
   }
 
@@ -769,6 +785,7 @@ export {
   reconcileAll,
   syncAllGroupMeta,
   handleRequest,
+  reopenInContainer,
   maybeInheritContainer,
   buildMenus,
   trackActive,

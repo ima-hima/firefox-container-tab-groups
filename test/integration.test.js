@@ -178,6 +178,27 @@ test("site routing leaves a tab already in the right container alone", async () 
   assert.equal(h.state.tabs.length, 1);
 });
 
+test("reopenInContainer moves a container tab back to no container", async () => {
+  const h = await loadBackground({ containers: [WORK] });
+  const t = h.addTab({
+    windowId: 1,
+    cookieStoreId: "c-work",
+    url: "https://example.com/",
+  });
+
+  const acted = await h.bg.reopenInContainer(await h.browser.tabs.get(t.id), "firefox-default");
+
+  assert.equal(acted, true);
+  assert.equal(h.state.tabs.length, 1);
+  assert.equal(h.state.tabs[0].cookieStoreId, "firefox-default");
+  assert.equal(h.state.tabs[0].url, "https://example.com/");
+  assert.ok(!h.state.tabs.some((x) => x.id === t.id), "original tab closed");
+
+  // already in no container -> no-op
+  const again = await h.bg.reopenInContainer(await h.browser.tabs.get(h.state.tabs[0].id), "firefox-default");
+  assert.equal(again, false);
+});
+
 test("new-tab inheritance: blank tab adopts the active tab's container", async () => {
   const h = await loadBackground({
     containers: [WORK],
