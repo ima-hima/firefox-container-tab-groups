@@ -23,6 +23,8 @@ const DEFAULT_SETTINGS = {
   syncTitleAndColor: true,
   // Where a tab lands when added to its group: "rightmost" or "leftmost".
   newTabPosition: "rightmost",
+  // Open a blank new tab (Ctrl+T, "+") in the current tab's container.
+  newTabInheritsContainer: false,
 };
 
 // contextualIdentities colours -> tabGroups.Color values
@@ -333,7 +335,7 @@ async function placeTab(tabId) {
   } catch {
     return;
   }
-  if (!eligible(tab) || tab.incognito) return;
+  if (!tab || !eligible(tab) || tab.incognito) return;
 
   const originWindow = tab.windowId;
   const wasActive = tab.active;
@@ -711,6 +713,56 @@ browser.menus.onClicked.addListener((info, tab) => {
 });
 
 /* ================================================================== *
+ * Feature 4: inherit the current tab's container for blank new tabs
+ * ================================================================== */
+
+// windowId -> cookieStoreId of the currently-active tab. onCreated fires before
+// onActivated, so when a foreground new tab appears this still holds the tab the
+// user was on.
+const activeStore = new Map();
+
+async function trackActive(windowId, tabId) {
+  try {
+    const t = await browser.tabs.get(tabId);
+    activeStore.set(windowId, t.cookieStoreId || DEFAULT_STORE);
+  } catch {
+    /* tab gone */
+  }
+}
+
+const BLANK_URLS = new Set(["", "about:newtab", "about:home", "about:blank"]);
+
+async function maybeInheritContainer(newTab, inheritFrom) {
+  if (!settings.newTabInheritsContainer) return;
+  if (newTab.incognito || Date.now() < settleUntil) return;
+  if ((newTab.cookieStoreId || DEFAULT_STORE) !== DEFAULT_STORE) return;
+
+  // Only blank new tabs with no opener: link-opens are already containered by
+  // Firefox, and a real URL here means a navigation we must not disturb.
+  if (newTab.openerTabId != null) return;
+  if (!BLANK_URLS.has(newTab.url || "")) return;
+
+  if (!inheritFrom || inheritFrom === DEFAULT_STORE) return;
+  try {
+    await browser.contextualIdentities.get(inheritFrom);
+  } catch {
+    return;
+  }
+
+  try {
+    await browser.tabs.create({
+      cookieStoreId: inheritFrom,
+      windowId: newTab.windowId,
+      index: newTab.index,
+      active: newTab.active,
+    });
+    await browser.tabs.remove(newTab.id);
+  } catch (err) {
+    console.error("[CTG] inherit-container failed", err);
+  }
+}
+
+/* ================================================================== *
  * Event wiring
  * ================================================================== */
 
@@ -747,7 +799,19 @@ browser.runtime.onStartup.addListener(() => {
   setTimeout(() => serialize(reconcileAll), 12000);
 });
 
-browser.tabs.onCreated.addListener((tab) => onTabSettled(tab.id));
+browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
+  trackActive(windowId, tabId);
+});
+
+browser.tabs.onCreated.addListener((tab) => {
+  // Read the pre-existing active container synchronously, before onActivated
+  // for this new tab can overwrite it.
+  const inheritFrom = activeStore.get(tab.windowId);
+  if (settings.newTabInheritsContainer) {
+    serialize(() => maybeInheritContainer(tab, inheritFrom));
+  }
+  onTabSettled(tab.id);
+});
 browser.tabs.onAttached.addListener((tabId) => onTabSettled(tabId));
 
 browser.contextualIdentities.onCreated.addListener(() =>
@@ -787,6 +851,9 @@ browser.tabGroups.onRemoved.addListener((group) =>
 serialize(async () => {
   await Promise.all([loadSettings(), loadRules(), loadGroupMap()]);
   await buildMenus();
+  for (const t of await browser.tabs.query({ active: true })) {
+    activeStore.set(t.windowId, t.cookieStoreId || DEFAULT_STORE);
+  }
 });
 // Deferred so that, on a cold browser start, session restore has a moment to
 // finish before the first reconcile. Mid-session wake-ups just reconcile ~2s later.

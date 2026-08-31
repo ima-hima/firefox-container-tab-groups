@@ -4,8 +4,13 @@ const DEFAULT_SETTINGS = {
   groupDefaultContainer: false,
   syncTitleAndColor: true,
   newTabPosition: "rightmost",
+  newTabInheritsContainer: false,
 };
-const CHECKBOX_FIELDS = ["groupDefaultContainer", "syncTitleAndColor"];
+const CHECKBOX_FIELDS = [
+  "groupDefaultContainer",
+  "syncTitleAndColor",
+  "newTabInheritsContainer",
+];
 
 const DEFAULT_STORE = "firefox-default";
 const MATCH_LABELS = {

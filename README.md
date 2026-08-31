@@ -1,7 +1,7 @@
 # Container Tab Groups
 
-A small Firefox extension with two related features, both built on Firefox's
-native tab groups (Firefox 140+) and Multi-Account Containers:
+A small Firefox extension built on Firefox's native tab groups (Firefox 140+)
+and Multi-Account Containers:
 
 1. **Group tabs by container.** One native tab group per container. Open a tab
    in your "Work" container and it joins the "Work" tab group; open one in
@@ -13,6 +13,8 @@ native tab groups (Firefox 140+) and Multi-Account Containers:
    open a matching site, the tab is reopened in the chosen container (and so
    lands in that container's group). Rules can be added from the options page or
    straight from the tab's right-click menu.
+3. **Inherit the container for new tabs** (optional). A blank new tab (Ctrl+T,
+   the "+" button) opens in whatever container the tab you were on is using.
 
 This is a from-scratch alternative to
 [Simple Tab Groups](https://github.com/Drive4ik/simple-tab-groups): rather than
@@ -61,6 +63,15 @@ would empty Firefox's last remaining window.
   closed. A short-lived per-URL guard prevents reopen loops.
 - Matching an already-correct container is left alone; **any other** container
   is moved to the assigned one.
+
+**New-tab container inheritance** (off by default)
+
+- `tabs.onActivated` keeps a `windowId → active cookieStoreId` map.
+- On `tabs.onCreated`, a blank (`about:newtab` / `about:blank` / `about:home`),
+  opener-less, default-container tab is re-created with the window's active
+  container and the blank one is closed.
+- Links are untouched (Firefox already opens them in their opener's container),
+  and a tab that already has a real URL is never disturbed.
 
 **Tab right-click menu**
 
