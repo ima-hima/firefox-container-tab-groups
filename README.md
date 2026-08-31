@@ -116,6 +116,8 @@ would empty Firefox's last remaining window.
   tab there. The tab's current container is marked.
 - *Stop opening "&lt;host&gt;" in a container* — shown only when a domain rule
   for that host exists; removes it.
+- *Reopen tab without a container* — shown only when the tab is in a container;
+  reopens it in no container right now, without adding a rule.
 - *Move tab to its container's group* — re-runs the grouper for that one tab
   (useful after you've dragged a tab out of its group).
 
