@@ -21,6 +21,8 @@ const DEFAULT_SETTINGS = {
   groupDefaultContainer: false,
   // Keep each group's title and colour matched to its container.
   syncTitleAndColor: true,
+  // Where a tab lands when added to its group: "rightmost" or "leftmost".
+  newTabPosition: "rightmost",
 };
 
 // contextualIdentities colours -> tabGroups.Color values
@@ -286,6 +288,34 @@ async function moveTabToWindow(tab, groupWindowId, windowCount) {
   return groupWindowId;
 }
 
+/**
+ * Slide `tabIds` (already members of `groupId`) to the configured end of the
+ * group, keeping their relative order. The group's span doesn't change, so the
+ * anchor index is stable across the individual moves.
+ */
+async function positionInGroup(tabIds, groupId) {
+  if (tabIds.length === 0) return;
+  const groupTabs = (await browser.tabs.query({ groupId })).sort(
+    (a, b) => a.index - b.index
+  );
+  if (groupTabs.length <= 1) return;
+
+  const leftmost = settings.newTabPosition === "leftmost";
+  const anchor = leftmost
+    ? groupTabs[0].index
+    : groupTabs[groupTabs.length - 1].index;
+  // For the left end, inserting each tab at the anchor pushes earlier ones
+  // right, so feed them in reverse to end up in tabIds order.
+  const ordered = leftmost ? [...tabIds].reverse() : [...tabIds];
+  for (const id of ordered) {
+    try {
+      await browser.tabs.move(id, { index: anchor });
+    } catch {
+      /* tab moved/closed underneath us; ignore */
+    }
+  }
+}
+
 async function createGroupInWindow(store, tabIds, windowId, desc) {
   const groupId = await browser.tabs.group({
     tabIds,
@@ -345,6 +375,7 @@ async function placeTab(tabId) {
   const fresh = await browser.tabs.get(tabId);
   if (fresh.groupId !== target.groupId) {
     await browser.tabs.group({ groupId: target.groupId, tabIds: [tabId] });
+    await positionInGroup([tabId], target.groupId);
   }
   await rememberGroup(store, target.groupId, target.windowId);
   await setGroupMeta(target.groupId, desc);
@@ -410,7 +441,10 @@ async function reconcileAll() {
         return eligible(t) && s === store && t.groupId !== groupId;
       })
       .map((t) => t.id);
-    if (ids.length) await browser.tabs.group({ groupId, tabIds: ids });
+    if (ids.length) {
+      await browser.tabs.group({ groupId, tabIds: ids });
+      await positionInGroup(ids, groupId);
+    }
     await setGroupMeta(groupId, desc);
   }
 }

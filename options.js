@@ -3,8 +3,9 @@
 const DEFAULT_SETTINGS = {
   groupDefaultContainer: false,
   syncTitleAndColor: true,
+  newTabPosition: "rightmost",
 };
-const SETTING_FIELDS = Object.keys(DEFAULT_SETTINGS);
+const CHECKBOX_FIELDS = ["groupDefaultContainer", "syncTitleAndColor"];
 
 const DEFAULT_STORE = "firefox-default";
 const MATCH_LABELS = {
@@ -21,16 +22,25 @@ let rules = [];
 async function restoreSettings() {
   const stored = await browser.storage.local.get("settings");
   const s = { ...DEFAULT_SETTINGS, ...(stored.settings || {}) };
-  for (const id of SETTING_FIELDS) {
+  for (const id of CHECKBOX_FIELDS) {
     document.getElementById(id).checked = Boolean(s[id]);
   }
+  const pos = s.newTabPosition === "leftmost" ? "leftmost" : "rightmost";
+  const radio = document.querySelector(
+    `input[name="newTabPosition"][value="${pos}"]`
+  );
+  if (radio) radio.checked = true;
 }
 
 async function saveSettings() {
   const s = {};
-  for (const id of SETTING_FIELDS) {
+  for (const id of CHECKBOX_FIELDS) {
     s[id] = document.getElementById(id).checked;
   }
+  const picked = document.querySelector(
+    'input[name="newTabPosition"]:checked'
+  );
+  s.newTabPosition = picked && picked.value === "leftmost" ? "leftmost" : "rightmost";
   await browser.storage.local.set({ settings: s });
 }
 
@@ -155,8 +165,13 @@ async function addRule() {
 async function init() {
   await Promise.all([restoreSettings(), loadContainers(), loadRules()]);
 
-  for (const id of SETTING_FIELDS) {
+  for (const id of CHECKBOX_FIELDS) {
     document.getElementById(id).addEventListener("change", saveSettings);
+  }
+  for (const radio of document.querySelectorAll(
+    'input[name="newTabPosition"]'
+  )) {
+    radio.addEventListener("change", saveSettings);
   }
 
   fillContainerSelect(document.getElementById("newContainer"));

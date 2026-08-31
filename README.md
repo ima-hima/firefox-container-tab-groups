@@ -38,6 +38,9 @@ via the `tabGroups` WebExtension API.
 - If the moved tab was the active one in its old window, focus follows it: the
   destination window is raised (`windows.update({focused:true})`) and the tab is
   selected there. Bulk reconciles never steal focus.
+- A tab added to a group is slid to the **rightmost** end of that group by
+  default; the options page can switch this to leftmost. Existing tabs already
+  in the group aren't reordered.
 - Group title/colour are synced from the container (`tabGroups.update()`) and
   re-synced when a container is renamed or recoloured.
 - On startup / install / container add·remove / settings change, everything is
