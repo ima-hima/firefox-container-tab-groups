@@ -119,12 +119,28 @@ and redirect navigations for the routing feature).
 ```bash
 npm install
 npm start          # launches Firefox with the extension loaded (web-ext run)
+npm test           # unit + integration tests (node:test, no browser)
 npm run lint       # web-ext lint
 npm run build      # produces web-ext-artifacts/*.zip
 ```
 
 Or load it unpacked: `about:debugging` → This Firefox → Load Temporary Add-on →
 pick `manifest.json`.
+
+### Layout
+
+| File | Role |
+|---|---|
+| `core.js` | pure decision logic — no `browser` API, no mutable state |
+| `background.js` | ES-module background: state, `browser` calls, event wiring |
+| `options.html` / `options.js` | preferences + rule table |
+| `test/core.test.js` | unit tests for `core.js` |
+| `test/fake-browser.js` | in-memory fake of the WebExtension surface used here |
+| `test/integration.test.js` | drives `background.js` against the fake (grouping, consolidation, routing, inheritance, rename) |
+
+Tests import `background.js` with a cache-busting query string so each test gets
+a fresh module instance and a fresh fake browser. CI (`.github/workflows/ci.yml`)
+runs `npm test` and `npm run lint` on every push and PR.
 
 ## License
 

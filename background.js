@@ -1,5 +1,3 @@
-"use strict";
-
 /**
  * Container Tab Groups
  * ====================
@@ -14,37 +12,30 @@
  *  2. Site routing - a list of "open this site in that container" rules. When a
  *                    top-level navigation matches a rule and the tab is in the
  *                    wrong container, the tab is reopened in the right one.
+ *
+ * Pure decision logic lives in core.js so it can be unit-tested without a
+ * browser; this file is the wiring around it.
  */
 
-const DEFAULT_SETTINGS = {
-  // Also group tabs that have no container (the "firefox-default" store).
-  groupDefaultContainer: false,
-  // Keep each group's title and colour matched to its container.
-  syncTitleAndColor: true,
-  // Where a tab lands when added to its group: "rightmost" or "leftmost".
-  newTabPosition: "rightmost",
-  // Open a blank new tab (Ctrl+T, "+") in the current tab's container.
-  newTabInheritsContainer: false,
-};
-
-// contextualIdentities colours -> tabGroups.Color values
-const COLOR_MAP = {
-  blue: "blue",
-  turquoise: "cyan",
-  green: "green",
-  yellow: "yellow",
-  orange: "orange",
-  red: "red",
-  pink: "pink",
-  purple: "purple",
-  toolbar: "grey",
-};
-
-const DEFAULT_STORE = "firefox-default";
-const DEFAULT_GROUP_TITLE = "No Container";
-const DEFAULT_GROUP_COLOR = "grey";
+import {
+  DEFAULT_SETTINGS,
+  COLOR_MAP,
+  DEFAULT_STORE,
+  DEFAULT_GROUP_TITLE,
+  DEFAULT_GROUP_COLOR,
+  normTitle,
+  hostOf,
+  matchRule,
+  describe,
+  eligible as isEligible,
+  homeWindowFor,
+  groupPositionMoves,
+  containerToInherit,
+} from "./core.js";
 
 let settings = { ...DEFAULT_SETTINGS };
+
+const eligible = (tab) => isEligible(tab, settings);
 
 /* ------------------------------------------------------------------ *
  * Tiny async mutex: overlapping tab events must not race each other
@@ -69,17 +60,6 @@ async function getContainers() {
   const map = new Map();
   for (const c of list) map.set(c.cookieStoreId, c);
   return map;
-}
-
-/** hostname for http(s) URLs, else null. */
-function hostOf(url) {
-  try {
-    const u = new URL(url);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    return u.hostname;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -119,26 +99,6 @@ async function reopenInContainer(tab, cookieStoreId, url = tab.url) {
 /* ================================================================== *
  * Feature 1: container -> tab group
  * ================================================================== */
-
-/** Target group title/colour for a given cookieStoreId, or null to skip. */
-function describe(cookieStoreId, containers) {
-  if (cookieStoreId === DEFAULT_STORE) {
-    return { title: DEFAULT_GROUP_TITLE, color: DEFAULT_GROUP_COLOR };
-  }
-  const c = containers.get(cookieStoreId);
-  if (!c) return null;
-  return { title: c.name, color: COLOR_MAP[c.color] || "grey" };
-}
-
-function eligible(tab) {
-  if (tab.pinned) return false;
-  const store = tab.cookieStoreId || DEFAULT_STORE;
-  if (store.startsWith("firefox-private")) return false;
-  if (store === DEFAULT_STORE && !settings.groupDefaultContainer) return false;
-  return true;
-}
-
-const normTitle = (s) => (s || "").trim().toLowerCase();
 
 /**
  * cookieStoreId -> { groupId, windowId }. Persisted in storage.local so it
@@ -260,23 +220,6 @@ async function setGroupMeta(groupId, desc, force = false) {
   }
 }
 
-/** Window id holding the most of `tabs`; ties broken by lowest window id. */
-function homeWindowFor(tabs) {
-  const counts = new Map();
-  for (const t of tabs) {
-    counts.set(t.windowId, (counts.get(t.windowId) || 0) + 1);
-  }
-  let best = null;
-  let bestN = -1;
-  for (const [win, n] of [...counts.entries()].sort((a, b) => a[0] - b[0])) {
-    if (n > bestN) {
-      best = win;
-      bestN = n;
-    }
-  }
-  return best;
-}
-
 /**
  * Move `tab` into `groupWindowId`. Skipped only when it would empty the very
  * last window (Firefox would have nowhere to put the browser). Consolidating a
@@ -296,22 +239,16 @@ async function moveTabToWindow(tab, groupWindowId, windowCount) {
  * anchor index is stable across the individual moves.
  */
 async function positionInGroup(tabIds, groupId) {
-  if (tabIds.length === 0) return;
-  const groupTabs = (await browser.tabs.query({ groupId })).sort(
-    (a, b) => a.index - b.index
+  const groupTabs = await browser.tabs.query({ groupId });
+  const plan = groupPositionMoves(
+    groupTabs,
+    tabIds,
+    settings.newTabPosition === "leftmost"
   );
-  if (groupTabs.length <= 1) return;
-
-  const leftmost = settings.newTabPosition === "leftmost";
-  const anchor = leftmost
-    ? groupTabs[0].index
-    : groupTabs[groupTabs.length - 1].index;
-  // For the left end, inserting each tab at the anchor pushes earlier ones
-  // right, so feed them in reverse to end up in tabIds order.
-  const ordered = leftmost ? [...tabIds].reverse() : [...tabIds];
-  for (const id of ordered) {
+  if (!plan) return;
+  for (const id of plan.orderedIds) {
     try {
-      await browser.tabs.move(id, { index: anchor });
+      await browser.tabs.move(id, { index: plan.anchor });
     } catch {
       /* tab moved/closed underneath us; ignore */
     }
@@ -479,43 +416,6 @@ async function loadRules() {
   rules = Array.isArray(stored.containerRules) ? stored.containerRules : [];
 }
 
-function escapeRegExp(s) {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function globToRegExp(glob) {
-  const body = glob.split("*").map(escapeRegExp).join(".*");
-  return new RegExp("^" + body + "$", "i");
-}
-
-function hostMatches(host, rule) {
-  const p = rule.pattern.trim().toLowerCase().replace(/^\*\./, "");
-  const h = host.toLowerCase();
-  if (rule.matchType === "exact") return h === p;
-  return h === p || h.endsWith("." + p); // "domain": host + subdomains
-}
-
-/** Returns the first enabled rule that matches `url`, or null. */
-function matchRule(url) {
-  let u;
-  try {
-    u = new URL(url);
-  } catch {
-    return null;
-  }
-  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-
-  for (const rule of rules) {
-    if (rule.enabled === false || !rule.pattern) continue;
-    if (rule.matchType === "glob") {
-      if (globToRegExp(rule.pattern).test(url)) return rule;
-    } else if (hostMatches(u.hostname, rule)) {
-      return rule;
-    }
-  }
-  return null;
-}
-
 // Guard against re-handling the tab we just opened for a given navigation.
 const recentlyRouted = new Map(); // url -> timestamp
 const ROUTE_TTL_MS = 4000;
@@ -533,7 +433,7 @@ function wasJustRouted(url) {
 async function handleRequest(details) {
   if (details.tabId < 0 || details.frameId !== 0) return {};
 
-  const rule = matchRule(details.url);
+  const rule = matchRule(details.url, rules);
   if (!rule) return {};
   if (wasJustRouted(details.url)) return {};
 
@@ -730,28 +630,24 @@ async function trackActive(windowId, tabId) {
   }
 }
 
-const BLANK_URLS = new Set(["", "about:newtab", "about:home", "about:blank"]);
-
 async function maybeInheritContainer(newTab, inheritFrom) {
-  if (!settings.newTabInheritsContainer) return;
-  if (newTab.incognito || Date.now() < settleUntil) return;
-  if ((newTab.cookieStoreId || DEFAULT_STORE) !== DEFAULT_STORE) return;
+  const target = containerToInherit(newTab, {
+    enabled: settings.newTabInheritsContainer,
+    now: Date.now(),
+    settleUntil,
+    inheritFrom,
+  });
+  if (!target) return;
 
-  // Only blank new tabs with no opener: link-opens are already containered by
-  // Firefox, and a real URL here means a navigation we must not disturb.
-  if (newTab.openerTabId != null) return;
-  if (!BLANK_URLS.has(newTab.url || "")) return;
-
-  if (!inheritFrom || inheritFrom === DEFAULT_STORE) return;
   try {
-    await browser.contextualIdentities.get(inheritFrom);
+    await browser.contextualIdentities.get(target);
   } catch {
     return;
   }
 
   try {
     await browser.tabs.create({
-      cookieStoreId: inheritFrom,
+      cookieStoreId: target,
       windowId: newTab.windowId,
       index: newTab.index,
       active: newTab.active,
@@ -774,6 +670,7 @@ function scheduleReconcile(delay = 500) {
     reconcileTimer = null;
     serialize(reconcileAll);
   }, delay);
+  reconcileTimer.unref?.(); // don't hold Node alive under test
 }
 
 // During session restore, Firefox creates tabs and re-creates their groups in
@@ -794,9 +691,9 @@ browser.runtime.onStartup.addListener(() => {
   // Let session restore finish re-creating windows/tabs/groups before we start
   // moving things around, then reconcile a couple of times as it settles.
   settleUntil = Date.now() + 12000;
-  setTimeout(() => serialize(reconcileAll), 1500);
-  setTimeout(() => serialize(reconcileAll), 5000);
-  setTimeout(() => serialize(reconcileAll), 12000);
+  for (const delay of [1500, 5000, 12000]) {
+    setTimeout(() => serialize(reconcileAll), delay).unref?.();
+  }
 });
 
 browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
@@ -848,13 +745,35 @@ browser.tabGroups.onRemoved.addListener((group) =>
  * Boot
  * ================================================================== */
 
-serialize(async () => {
+const ready = serialize(async () => {
   await Promise.all([loadSettings(), loadRules(), loadGroupMap()]);
   await buildMenus();
   for (const t of await browser.tabs.query({ active: true })) {
     activeStore.set(t.windowId, t.cookieStoreId || DEFAULT_STORE);
   }
 });
+
 // Deferred so that, on a cold browser start, session restore has a moment to
-// finish before the first reconcile. Mid-session wake-ups just reconcile ~2s later.
-scheduleReconcile(2000);
+// finish before the first reconcile. Mid-session wake-ups just reconcile ~2s
+// later. Tests import this module and drive functions directly, so they opt out.
+if (!globalThis.__CTG_TEST__) {
+  scheduleReconcile(2000);
+}
+
+/* ------------------------------------------------------------------ *
+ * Test surface — used by test/*.test.js, ignored by the extension.
+ * ------------------------------------------------------------------ */
+export {
+  ready,
+  placeTab,
+  reconcileAll,
+  syncAllGroupMeta,
+  handleRequest,
+  maybeInheritContainer,
+  buildMenus,
+  trackActive,
+  activeStore,
+};
+export function __setSettleUntil(t) {
+  settleUntil = t;
+}

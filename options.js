@@ -1,18 +1,11 @@
-"use strict";
+import { DEFAULT_SETTINGS, DEFAULT_STORE } from "./core.js";
 
-const DEFAULT_SETTINGS = {
-  groupDefaultContainer: false,
-  syncTitleAndColor: true,
-  newTabPosition: "rightmost",
-  newTabInheritsContainer: false,
-};
 const CHECKBOX_FIELDS = [
   "groupDefaultContainer",
   "syncTitleAndColor",
   "newTabInheritsContainer",
 ];
 
-const DEFAULT_STORE = "firefox-default";
 const MATCH_LABELS = {
   domain: "Domain + subdomains",
   exact: "Exact host",
