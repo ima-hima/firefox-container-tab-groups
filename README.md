@@ -16,6 +16,47 @@ and Multi-Account Containers:
 3. **Inherit the container for new tabs** (optional). A blank new tab opens in the
    same container as the current tab.
 
+## Install
+
+This extension isn't published on [addons.mozilla.org](https://addons.mozilla.org),
+so pick one of these.
+
+### Try it now (temporary)
+
+1. Clone the repo:
+   ```bash
+   git clone https://github.com/ima-hima/firefox-container-tab-groups
+   ```
+2. In Firefox, open `about:debugging#/runtime/this-firefox`.
+3. Click **Load Temporary Add-on…** and choose `manifest.json` from the clone.
+
+It works immediately but is removed when Firefox restarts. Good for a test drive.
+
+### Permanent (self-signed through AMO)
+
+Release Firefox only runs signed extensions, but Mozilla signs *unlisted* builds
+automatically with no review:
+
+1. Sign in with a Firefox account and generate API credentials at
+   <https://addons.mozilla.org/developers/addon/api/key/>.
+2. Build and sign:
+   ```bash
+   npm install
+   WEB_EXT_API_KEY=<issuer> WEB_EXT_API_SECRET=<secret> npm run sign
+   ```
+   This drops a signed `.xpi` in `web-ext-artifacts/`.
+3. Install it: open `about:addons`, click the gear ⚙ → **Install Add-on From
+   File…**, and pick the `.xpi` (or just drag the `.xpi` onto a Firefox window).
+
+To update later: bump `version` in `manifest.json`, re-run `npm run sign`,
+reinstall the new `.xpi`.
+
+### Firefox Developer Edition / Nightly / ESR
+
+Set `xpinstall.signatures.required` to `false` in `about:config`, then install
+the unsigned `web-ext-artifacts/*.zip` from `npm run build` the same way as
+above. This toggle has no effect on release or Beta Firefox.
+
 ## How it works
 
 **Grouping**
@@ -113,14 +154,14 @@ and redirect navigations for the routing feature).
 
 ```bash
 npm install
-npm start          # launches Firefox with the extension loaded (web-ext run)
+npm start          # launches a scratch Firefox with the extension loaded
 npm test           # unit + integration tests (node:test, no browser)
 npm run lint       # web-ext lint
 npm run build      # produces web-ext-artifacts/*.zip
+npm run sign       # signed .xpi via AMO (needs WEB_EXT_API_KEY / _SECRET)
 ```
 
-Or load it unpacked: `about:debugging` → This Firefox → Load Temporary Add-on →
-pick `manifest.json`.
+See [Install](#install) for loading it into your everyday Firefox.
 
 ### Layout
 
