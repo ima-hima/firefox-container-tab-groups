@@ -213,7 +213,7 @@ test("new-tab inheritance: blank tab adopts the active tab's container", async (
     url: "about:newtab",
     active: true,
   });
-  await h.bg.maybeInheritContainer(blank, "c-work");
+  await h.bg.maybeInheritContainer(blank.id, "c-work");
 
   const stores = h.state.tabs.map((t) => t.cookieStoreId).sort();
   assert.deepEqual(stores, ["c-work", "c-work"]);
@@ -231,9 +231,32 @@ test("new-tab inheritance: a link-opened tab (has opener) is left alone", async 
     url: "about:blank",
     openerTabId: 42,
   });
-  await h.bg.maybeInheritContainer(blank, "c-work");
+  await h.bg.maybeInheritContainer(blank.id, "c-work");
   assert.equal(h.state.tabs.length, 1);
   assert.equal(h.state.tabs[0].cookieStoreId, "firefox-default");
+});
+
+test("new-tab inheritance: a tab that navigates on its own (Open and Fill) is left alone", async () => {
+  const h = await loadBackground({
+    containers: [WORK],
+    storageLocal: { settings: { newTabInheritsContainer: true } },
+  });
+  h.addTab({ windowId: 1, cookieStoreId: "c-work", active: true });
+  const t = h.addTab({
+    windowId: 1,
+    cookieStoreId: "firefox-default",
+    url: "about:blank",
+    active: true,
+  });
+  // by the time the deferred check runs, the tab has committed a real URL
+  await h.browser.tabs.update(t.id, { url: "https://vault.example.com/" });
+
+  await h.bg.maybeInheritContainer(t.id, "c-work");
+
+  assert.equal(h.state.tabs.length, 2);
+  const still = h.state.tabs.find((x) => x.id === t.id);
+  assert.ok(still, "the created tab survives");
+  assert.equal(still.cookieStoreId, "firefox-default");
 });
 
 test("container rename propagates to the existing group", async () => {

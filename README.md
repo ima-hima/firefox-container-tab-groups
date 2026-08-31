@@ -103,11 +103,12 @@ would empty Firefox's last remaining window.
 **New-tab container inheritance** (off by default)
 
 - `tabs.onActivated` keeps a `windowId → active cookieStoreId` map.
-- On `tabs.onCreated`, a blank (`about:newtab` / `about:blank` / `about:home`),
-  opener-less, default-container tab is re-created with the window's active
-  container and the blank one is closed.
-- Links are untouched (Firefox already opens them in their opener's container),
-  and a tab that already has a real URL is never disturbed.
+- On `tabs.onCreated` for a blank, opener-less, default-container tab, the check
+  is deferred ~400 ms and the tab re-read. A tab created via `tabs.create({url})`
+  — e.g. 1Password's "Open and Fill" — reports `about:blank` at creation but has
+  navigated by then, so it is left alone. Only a still-blank tab is re-created in
+  the window's active container.
+- Links are untouched (Firefox already opens them in their opener's container).
 
 **Tab right-click menu**
 

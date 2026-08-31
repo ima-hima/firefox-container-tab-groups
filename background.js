@@ -646,7 +646,18 @@ async function trackActive(windowId, tabId) {
   }
 }
 
-async function maybeInheritContainer(newTab, inheritFrom) {
+async function maybeInheritContainer(tabId, inheritFrom) {
+  let newTab;
+  try {
+    newTab = await browser.tabs.get(tabId);
+  } catch {
+    return; // tab already gone
+  }
+
+  // By now (called on a delay) a tab that was really headed somewhere — e.g.
+  // one opened by 1Password's "Open and Fill" — has a real URL, so
+  // containerToInherit rejects it. Only a still-blank tab is one the user
+  // opened themselves.
   const target = containerToInherit(newTab, {
     enabled: settings.newTabInheritsContainer,
     now: Date.now(),
@@ -716,12 +727,19 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
   trackActive(windowId, tabId);
 });
 
+const INHERIT_DELAY_MS = 400;
+
 browser.tabs.onCreated.addListener((tab) => {
   // Read the pre-existing active container synchronously, before onActivated
   // for this new tab can overwrite it.
   const inheritFrom = activeStore.get(tab.windowId);
   if (settings.newTabInheritsContainer) {
-    serialize(() => maybeInheritContainer(tab, inheritFrom));
+    // A tab opened via tabs.create({ url }) reports about:blank here and
+    // navigates a moment later. Wait, then re-check the tab before touching it.
+    setTimeout(
+      () => serialize(() => maybeInheritContainer(tab.id, inheritFrom)),
+      INHERIT_DELAY_MS
+    ).unref?.();
   }
   onTabSettled(tab.id);
 });
