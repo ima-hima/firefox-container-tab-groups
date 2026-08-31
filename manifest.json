@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Container Corral",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "Group tabs by their Multi-Account Container into native tab groups, and open chosen sites in a chosen container.",
   "browser_specific_settings": {
     "gecko": {
