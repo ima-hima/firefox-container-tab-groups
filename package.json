@@ -1,0 +1,18 @@
+{
+  "name": "container-tab-groups",
+  "version": "0.1.0",
+  "description": "Automatically places every tab from a Multi-Account Container into its own native Firefox tab group.",
+  "private": true,
+  "scripts": {
+    "start": "web-ext run",
+    "lint": "web-ext lint",
+    "build": "web-ext build --overwrite-dest"
+  },
+  "devDependencies": {
+    "web-ext": "^8.0.0"
+  },
+  "webExt": {
+    "sourceDir": ".",
+    "ignoreFiles": ["package.json", "package-lock.json", "node_modules", "web-ext-artifacts", "README.md", ".git", ".gitignore"]
+  }
+}
