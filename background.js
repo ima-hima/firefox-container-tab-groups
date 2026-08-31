@@ -6,16 +6,13 @@
  *
  * Two features, both built on Firefox's native tab groups + containers:
  *
- *  1. Grouping     - keeps exactly one native tab group per container, per
- *                    window. Tabs created in / moved into a window are placed
- *                    in the group for their contextual identity.
+ *  1. Grouping     - keeps one native tab group per container, across all
+ *                    windows. Because tab groups cannot span windows, a tab is
+ *                    moved to the window that holds its container's group.
  *
  *  2. Site routing - a list of "open this site in that container" rules. When a
  *                    top-level navigation matches a rule and the tab is in the
  *                    wrong container, the tab is reopened in the right one.
- *
- * Firefox tab groups cannot span windows, but containers are global, so the
- * unit of grouping is (window, container).
  */
 
 const DEFAULT_SETTINGS = {
@@ -43,9 +40,6 @@ const DEFAULT_GROUP_TITLE = "No Container";
 const DEFAULT_GROUP_COLOR = "grey";
 
 let settings = { ...DEFAULT_SETTINGS };
-
-// windowId -> Map(cookieStoreId -> groupId)
-const groupIndex = new Map();
 
 /* ------------------------------------------------------------------ *
  * Tiny async mutex: overlapping tab events must not race each other
@@ -139,65 +133,110 @@ function eligible(tab) {
   return true;
 }
 
-function indexFor(windowId) {
-  let perWindow = groupIndex.get(windowId);
-  if (!perWindow) {
-    perWindow = new Map();
-    groupIndex.set(windowId, perWindow);
-  }
-  return perWindow;
-}
-
 const normTitle = (s) => (s || "").trim().toLowerCase();
 
 /**
- * The id of the group in `windowId` whose title matches `title`, or null.
- * If several groups share the title (e.g. a session-restore race created a
- * duplicate), their tabs are merged into the oldest and that id is returned.
+ * cookieStoreId -> { groupId, windowId }. Persisted in storage.local so it
+ * survives event-page suspension and browser restarts. This is what lets a
+ * container rename reach the right group, and what stops a second same-named
+ * group being spawned after the background page has been unloaded. Entries are
+ * validated on use (tabGroups.get) and dropped when stale.
  */
-async function findGroupByTitle(windowId, title) {
-  const key = normTitle(title);
-  if (!key) return null;
+let groupMap = {};
 
-  const groups = await browser.tabGroups.query({ windowId });
-  const matches = groups
-    .filter((g) => normTitle(g.title) === key)
-    .sort((a, b) => a.id - b.id);
-  if (matches.length === 0) return null;
-
-  const keep = matches[0];
-  for (const dupe of matches.slice(1)) {
-    const dupeTabs = await browser.tabs.query({ groupId: dupe.id });
-    if (dupeTabs.length) {
-      await browser.tabs.group({
-        groupId: keep.id,
-        tabIds: dupeTabs.map((t) => t.id),
-      });
-    }
+async function loadGroupMap() {
+  try {
+    const s = await browser.storage.local.get("groupMap");
+    groupMap = s.groupMap || {};
+  } catch {
+    groupMap = {};
   }
-  return keep.id;
 }
 
-/** Find an existing group for (window, container); returns groupId or null. */
-async function resolveGroup(windowId, cookieStoreId, desc) {
-  const perWindow = indexFor(windowId);
+async function rememberGroup(store, groupId, windowId) {
+  const prev = groupMap[store];
+  if (prev && prev.groupId === groupId && prev.windowId === windowId) return;
+  groupMap[store] = { groupId, windowId };
+  try {
+    await browser.storage.local.set({ groupMap });
+  } catch {
+    /* storage unavailable; fall back to in-memory only */
+  }
+}
 
-  const cached = perWindow.get(cookieStoreId);
-  if (cached != null) {
+async function forgetGroup(store) {
+  if (!groupMap[store]) return;
+  delete groupMap[store];
+  try {
+    await browser.storage.local.set({ groupMap });
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Set of ids of normal, non-incognito windows. */
+async function normalWindowIds() {
+  const wins = await browser.windows.getAll({ windowTypes: ["normal"] });
+  return new Set(wins.filter((w) => !w.incognito).map((w) => w.id));
+}
+
+/**
+ * The canonical group for `desc` across all normal windows, as
+ * { groupId, windowId }, or null if none exists.
+ *
+ * Several groups can share the name: a per-window group in each of several
+ * windows, or a session-restore duplicate. The oldest group id wins as
+ * canonical. Duplicates in the SAME window as the canonical group are merged
+ * into it now; cross-window duplicates are drained by reconcile (which we nudge).
+ */
+async function findContainerGroup(store, desc, winIds) {
+  // 1. Trust the remembered mapping if it still points at a live group.
+  const remembered = groupMap[store];
+  if (remembered != null) {
     try {
-      await browser.tabGroups.get(cached);
-      return cached;
+      const g = await browser.tabGroups.get(remembered.groupId);
+      if (winIds.has(g.windowId)) {
+        if (g.windowId !== remembered.windowId) {
+          await rememberGroup(store, g.id, g.windowId);
+        }
+        return { groupId: g.id, windowId: g.windowId };
+      }
     } catch {
-      perWindow.delete(cookieStoreId);
+      await forgetGroup(store);
     }
   }
 
-  // Match (and de-duplicate) an existing group in this window by title. The
-  // in-memory cache is empty after every event-page suspension, so this is the
-  // real safeguard against spawning a second group with the same name.
-  const found = await findGroupByTitle(windowId, desc.title);
-  if (found != null) perWindow.set(cookieStoreId, found);
-  return found;
+  // 2. Otherwise match by (normalised) title across every normal window.
+  const key = normTitle(desc.title);
+  if (!key) return null;
+
+  const groups = (await browser.tabGroups.query({})).filter(
+    (g) => normTitle(g.title) === key && winIds.has(g.windowId)
+  );
+  if (groups.length === 0) return null;
+  groups.sort((a, b) => a.id - b.id);
+  const canonical = groups[0];
+
+  let sameWindowDupes = 0;
+  let crossWindowDupes = 0;
+  for (const g of groups.slice(1)) {
+    if (g.windowId === canonical.windowId) {
+      sameWindowDupes++;
+      const t = await browser.tabs.query({ groupId: g.id });
+      if (t.length) {
+        await browser.tabs.group({
+          groupId: canonical.id,
+          tabIds: t.map((x) => x.id),
+        });
+      }
+    } else {
+      crossWindowDupes++;
+    }
+  }
+  if (crossWindowDupes > 0) scheduleReconcile();
+
+  await rememberGroup(store, canonical.id, canonical.windowId);
+  return { groupId: canonical.id, windowId: canonical.windowId };
 }
 
 /** Name/colour a group. `force` names even when the sync setting is off. */
@@ -216,6 +255,46 @@ async function setGroupMeta(groupId, desc, force = false) {
   }
 }
 
+/** Window id holding the most of `tabs`; ties broken by lowest window id. */
+function homeWindowFor(tabs) {
+  const counts = new Map();
+  for (const t of tabs) {
+    counts.set(t.windowId, (counts.get(t.windowId) || 0) + 1);
+  }
+  let best = null;
+  let bestN = -1;
+  for (const [win, n] of [...counts.entries()].sort((a, b) => a[0] - b[0])) {
+    if (n > bestN) {
+      best = win;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
+/**
+ * Move `tab` into `groupWindowId`. Skipped only when it would empty the very
+ * last window (Firefox would have nowhere to put the browser). Consolidating a
+ * lone tab out of one of several windows is fine — the empty window closes,
+ * which is the point. Returns the window the tab ended up in.
+ */
+async function moveTabToWindow(tab, groupWindowId, windowCount) {
+  if (tab.windowId === groupWindowId) return tab.windowId;
+  if (windowCount <= 1) return tab.windowId;
+  await browser.tabs.move(tab.id, { windowId: groupWindowId, index: -1 });
+  return groupWindowId;
+}
+
+async function createGroupInWindow(store, tabIds, windowId, desc) {
+  const groupId = await browser.tabs.group({
+    tabIds,
+    createProperties: { windowId },
+  });
+  await rememberGroup(store, groupId, windowId);
+  await setGroupMeta(groupId, desc, true);
+  return groupId;
+}
+
 async function placeTab(tabId) {
   let tab;
   try {
@@ -223,102 +302,118 @@ async function placeTab(tabId) {
   } catch {
     return;
   }
-  if (!eligible(tab)) return;
+  if (!eligible(tab) || tab.incognito) return;
 
   const containers = await getContainers();
   const store = tab.cookieStoreId || DEFAULT_STORE;
   const desc = describe(store, containers);
   if (!desc) return;
 
-  // Already in a group whose name matches the container? Adopt it as-is.
+  // Already in a correctly-named group? Adopt it and stop.
   if (typeof tab.groupId === "number" && tab.groupId >= 0) {
     try {
-      const current = await browser.tabGroups.get(tab.groupId);
-      if (normTitle(current.title) === normTitle(desc.title)) {
-        indexFor(tab.windowId).set(store, current.id);
-        await setGroupMeta(current.id, desc);
+      const g = await browser.tabGroups.get(tab.groupId);
+      if (normTitle(g.title) === normTitle(desc.title)) {
+        await rememberGroup(store, g.id, g.windowId);
+        await setGroupMeta(g.id, desc);
         return;
       }
     } catch {
-      /* fall through and resolve normally */
+      /* fall through */
     }
   }
 
-  let groupId = await resolveGroup(tab.windowId, store, desc);
+  const winIds = await normalWindowIds();
+  const target = await findContainerGroup(store, desc, winIds);
 
-  if (groupId == null) {
-    groupId = await browser.tabs.group({
-      tabIds: [tabId],
-      createProperties: { windowId: tab.windowId },
-    });
-    indexFor(tab.windowId).set(store, groupId);
-    await setGroupMeta(groupId, desc, true);
-  } else {
-    if (tab.groupId !== groupId) {
-      await browser.tabs.group({ groupId, tabIds: [tabId] });
-    }
-    await setGroupMeta(groupId, desc);
+  if (target == null) {
+    await createGroupInWindow(store, [tabId], tab.windowId, desc);
+    return;
   }
+
+  const landed = await moveTabToWindow(tab, target.windowId, winIds.size);
+  if (landed !== target.windowId) {
+    // Only reachable when this is the last window -> keep a local group.
+    await createGroupInWindow(store, [tabId], tab.windowId, desc);
+    return;
+  }
+
+  const fresh = await browser.tabs.get(tabId);
+  if (fresh.groupId !== target.groupId) {
+    await browser.tabs.group({ groupId: target.groupId, tabIds: [tabId] });
+  }
+  await rememberGroup(store, target.groupId, target.windowId);
+  await setGroupMeta(target.groupId, desc);
 }
 
 async function reconcileAll() {
-  groupIndex.clear();
-
-  const wins = await browser.windows.getAll({ windowTypes: ["normal"] });
+  const wins = (
+    await browser.windows.getAll({ windowTypes: ["normal"] })
+  ).filter((w) => !w.incognito);
+  const winIds = new Set(wins.map((w) => w.id));
   const containers = await getContainers();
 
-  for (const win of wins) {
-    if (win.incognito) continue;
-
-    const tabs = await browser.tabs.query({ windowId: win.id });
-    const byStore = new Map();
-    for (const tab of tabs) {
+  // eligible tabs bucketed by store, across every normal window
+  const byStore = new Map();
+  for (const w of wins) {
+    for (const tab of await browser.tabs.query({ windowId: w.id })) {
       if (!eligible(tab)) continue;
       const store = tab.cookieStoreId || DEFAULT_STORE;
       if (!byStore.has(store)) byStore.set(store, []);
       byStore.get(store).push(tab);
     }
+  }
 
-    for (const [store, storeTabs] of byStore) {
-      const desc = describe(store, containers);
-      if (!desc) continue;
+  for (const [store, tabs] of byStore) {
+    const desc = describe(store, containers);
+    if (!desc) continue;
 
-      // resolveGroup merges any same-named duplicates before returning.
-      let groupId = await resolveGroup(win.id, store, desc);
-      if (groupId == null) {
-        groupId = await browser.tabs.group({
-          tabIds: storeTabs.map((t) => t.id),
-          createProperties: { windowId: win.id },
-        });
-        indexFor(win.id).set(store, groupId);
-        await setGroupMeta(groupId, desc, true);
-      } else {
-        // Re-query: some of these tabs may have just been merged in above.
-        const fresh = await browser.tabs.query({ windowId: win.id });
-        const stray = fresh
-          .filter((t) => {
-            const s = t.cookieStoreId || DEFAULT_STORE;
-            return eligible(t) && s === store && t.groupId !== groupId;
-          })
-          .map((t) => t.id);
-        if (stray.length) {
-          await browser.tabs.group({ groupId, tabIds: stray });
-        }
-        await setGroupMeta(groupId, desc);
-      }
+    let groupId;
+    let groupWindowId;
+
+    const target = await findContainerGroup(store, desc, winIds);
+    if (target) {
+      groupId = target.groupId;
+      groupWindowId = target.windowId;
+    } else {
+      groupWindowId = homeWindowFor(tabs);
+      const seed = tabs
+        .filter((t) => t.windowId === groupWindowId)
+        .map((t) => t.id);
+      groupId = await createGroupInWindow(store, seed, groupWindowId, desc);
     }
+
+    for (const t of tabs) {
+      await moveTabToWindow(t, groupWindowId, winIds.size);
+    }
+
+    // group everything for this store that now sits in the group's window
+    const here = await browser.tabs.query({ windowId: groupWindowId });
+    const ids = here
+      .filter((t) => {
+        const s = t.cookieStoreId || DEFAULT_STORE;
+        return eligible(t) && s === store && t.groupId !== groupId;
+      })
+      .map((t) => t.id);
+    if (ids.length) await browser.tabs.group({ groupId, tabIds: ids });
+    await setGroupMeta(groupId, desc);
   }
 }
 
+/** Re-apply titles/colours after a container is renamed or recoloured. */
 async function syncAllGroupMeta() {
   if (!settings.syncTitleAndColor) return;
   const containers = await getContainers();
-  for (const [, perWindow] of groupIndex) {
-    for (const [store, groupId] of perWindow) {
-      const desc = describe(store, containers);
-      if (desc) await setGroupMeta(groupId, desc);
-    }
+  const winIds = await normalWindowIds();
+
+  for (const c of containers.values()) {
+    const desc = { title: c.name, color: COLOR_MAP[c.color] || "grey" };
+    const target = await findContainerGroup(c.cookieStoreId, desc, winIds);
+    if (target) await setGroupMeta(target.groupId, desc, true);
   }
+  const defDesc = { title: DEFAULT_GROUP_TITLE, color: DEFAULT_GROUP_COLOR };
+  const defTarget = await findContainerGroup(DEFAULT_STORE, defDesc, winIds);
+  if (defTarget) await setGroupMeta(defTarget.groupId, defDesc, true);
 }
 
 /* ================================================================== *
@@ -595,10 +690,12 @@ function onTabSettled(tabId) {
 
 browser.runtime.onInstalled.addListener(() => serialize(reconcileAll));
 browser.runtime.onStartup.addListener(() => {
+  // Let session restore finish re-creating windows/tabs/groups before we start
+  // moving things around, then reconcile a couple of times as it settles.
   settleUntil = Date.now() + 12000;
-  serialize(reconcileAll);
-  setTimeout(() => serialize(reconcileAll), 3000);
-  setTimeout(() => serialize(reconcileAll), 11000);
+  setTimeout(() => serialize(reconcileAll), 1500);
+  setTimeout(() => serialize(reconcileAll), 5000);
+  setTimeout(() => serialize(reconcileAll), 12000);
 });
 
 browser.tabs.onCreated.addListener((tab) => onTabSettled(tab.id));
@@ -616,6 +713,7 @@ browser.contextualIdentities.onUpdated.addListener(() =>
 browser.contextualIdentities.onRemoved.addListener((info) =>
   serialize(async () => {
     const csid = info.contextualIdentity.cookieStoreId;
+    await forgetGroup(csid);
     const kept = rules.filter((r) => r.cookieStoreId !== csid);
     if (kept.length !== rules.length) {
       await persistRules(kept);
@@ -625,24 +723,22 @@ browser.contextualIdentities.onRemoved.addListener((info) =>
   })
 );
 
-browser.windows.onRemoved.addListener((windowId) => {
-  groupIndex.delete(windowId);
-});
-
-browser.tabGroups.onRemoved.addListener((group) => {
-  const perWindow = groupIndex.get(group.windowId);
-  if (!perWindow) return;
-  for (const [store, id] of perWindow) {
-    if (id === group.id) perWindow.delete(store);
-  }
-});
+browser.tabGroups.onRemoved.addListener((group) =>
+  serialize(async () => {
+    for (const [store, entry] of Object.entries(groupMap)) {
+      if (entry.groupId === group.id) await forgetGroup(store);
+    }
+  })
+);
 
 /* ================================================================== *
  * Boot
  * ================================================================== */
 
 serialize(async () => {
-  await Promise.all([loadSettings(), loadRules()]);
+  await Promise.all([loadSettings(), loadRules(), loadGroupMap()]);
   await buildMenus();
-  await reconcileAll();
 });
+// Deferred so that, on a cold browser start, session restore has a moment to
+// finish before the first reconcile. Mid-session wake-ups just reconcile ~2s later.
+scheduleReconcile(2000);

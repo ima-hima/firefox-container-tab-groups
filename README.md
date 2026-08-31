@@ -3,10 +3,11 @@
 A small Firefox extension with two related features, both built on Firefox's
 native tab groups (Firefox 140+) and Multi-Account Containers:
 
-1. **Group tabs by container.** One native tab group per container, per window.
-   Open a tab in your "Work" container and it lands in the "Work" tab group;
-   open one in "Shopping" and it goes to "Shopping". The group's name and colour
-   follow the container.
+1. **Group tabs by container.** One native tab group per container. Open a tab
+   in your "Work" container and it joins the "Work" tab group; open one in
+   "Shopping" and it goes to "Shopping". The group's name and colour follow the
+   container. Because a tab group can't span windows, a tab is moved to the
+   window that already holds its container's group.
 2. **Open sites in a container.** A list of `site → container` rules. When you
    open a matching site, the tab is reopened in the chosen container (and so
    lands in that container's group). Rules can be added from the options page or
@@ -22,18 +23,27 @@ via the `tabGroups` WebExtension API.
 **Grouping**
 
 - `contextualIdentities.query()` + `tab.cookieStoreId` identify a tab's container.
-- On tab create / attach, the tab is moved into the group matching its container
-  for that window (`tabs.group()`), creating the group if needed.
-- Group title/colour are synced from the container (`tabGroups.update()`), and
+- One group per container is tracked in a `cookieStoreId → {groupId, windowId}`
+  map persisted in `storage.local` (so it survives the background page being
+  suspended and browser restarts; entries are validated on use and dropped when
+  stale). This is the primary lookup.
+- The fallback is matching a group by (trimmed, case-insensitive) title across
+  **all** windows. The oldest group id wins as the canonical one; same-window
+  duplicates are merged into it immediately, cross-window duplicates are drained
+  by the next reconcile.
+- On tab create / attach, the tab is moved to the canonical group's window (via
+  `tabs.move()`) and added to the group (`tabs.group()`), creating the group if
+  none exists. A tab already sitting in a correctly-named group is left in place.
+- Group title/colour are synced from the container (`tabGroups.update()`) and
   re-synced when a container is renamed or recoloured.
-- On startup / install / container removal, all windows are reconciled.
-- An existing group with the container's name is always reused rather than
-  creating a second one. If duplicates already exist (e.g. from a session-restore
-  race), reconcile merges their tabs into the oldest group and Firefox drops the
-  now-empty ones. During session restore, per-tab handling is paused for ~12 s so
-  Firefox finishes re-creating groups before the extension touches them.
+- On startup / install / container add·remove / settings change, everything is
+  reconciled: tabs are gathered from every window into one group per container.
+- During session restore, per-tab handling is paused for ~12 s (with a few
+  delayed reconciles) so Firefox finishes re-creating windows, tabs and groups
+  before the extension moves anything.
 
-Tab groups can't span windows, so each window gets its own group per container.
+The only time a tab *isn't* pulled into its container's window is when that
+would empty Firefox's last remaining window.
 
 **Site routing**
 
@@ -75,8 +85,12 @@ and redirect navigations for the routing feature).
 - **Requires Firefox 140+.**
 - Private windows are ignored (containers don't apply there).
 - Pinned tabs are left alone by the grouper.
+- Consolidation moves tabs between windows. A window whose last tab gets pulled
+  into another window will close — that's intentional, but worth knowing.
 - If you manually drag a tab out of its group, the extension won't fight you
   until the next create/attach/reconcile event.
+- A container renamed while the background page is cold *and* has no cached
+  mapping yet may keep its old group name until the next reconcile touches it.
 - "No Container" grouping is opt-in via the options page.
 - Site routing reopens the tab, so it loses forward/back history for that
   navigation (same tradeoff as Mozilla's Multi-Account Containers).
