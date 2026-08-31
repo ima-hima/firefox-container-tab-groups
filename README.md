@@ -7,7 +7,8 @@ native tab groups (Firefox 140+) and Multi-Account Containers:
    in your "Work" container and it joins the "Work" tab group; open one in
    "Shopping" and it goes to "Shopping". The group's name and colour follow the
    container. Because a tab group can't span windows, a tab is moved to the
-   window that already holds its container's group.
+   window that already holds its container's group — and if you were looking at
+   that tab, focus follows it to the new window.
 2. **Open sites in a container.** A list of `site → container` rules. When you
    open a matching site, the tab is reopened in the chosen container (and so
    lands in that container's group). Rules can be added from the options page or
@@ -34,6 +35,9 @@ via the `tabGroups` WebExtension API.
 - On tab create / attach, the tab is moved to the canonical group's window (via
   `tabs.move()`) and added to the group (`tabs.group()`), creating the group if
   none exists. A tab already sitting in a correctly-named group is left in place.
+- If the moved tab was the active one in its old window, focus follows it: the
+  destination window is raised (`windows.update({focused:true})`) and the tab is
+  selected there. Bulk reconciles never steal focus.
 - Group title/colour are synced from the container (`tabGroups.update()`) and
   re-synced when a container is renamed or recoloured.
 - On startup / install / container add·remove / settings change, everything is

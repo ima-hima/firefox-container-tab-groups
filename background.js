@@ -8,7 +8,8 @@
  *
  *  1. Grouping     - keeps one native tab group per container, across all
  *                    windows. Because tab groups cannot span windows, a tab is
- *                    moved to the window that holds its container's group.
+ *                    moved to the window that holds its container's group; if
+ *                    that tab was the active one, focus follows it there.
  *
  *  2. Site routing - a list of "open this site in that container" rules. When a
  *                    top-level navigation matches a rule and the tab is in the
@@ -304,6 +305,9 @@ async function placeTab(tabId) {
   }
   if (!eligible(tab) || tab.incognito) return;
 
+  const originWindow = tab.windowId;
+  const wasActive = tab.active;
+
   const containers = await getContainers();
   const store = tab.cookieStoreId || DEFAULT_STORE;
   const desc = describe(store, containers);
@@ -344,6 +348,17 @@ async function placeTab(tabId) {
   }
   await rememberGroup(store, target.groupId, target.windowId);
   await setGroupMeta(target.groupId, desc);
+
+  // If we pulled the tab out of the window the user was looking at, follow it:
+  // raise the destination window and select the tab there.
+  if (landed !== originWindow && wasActive) {
+    try {
+      await browser.tabs.update(tabId, { active: true });
+      await browser.windows.update(target.windowId, { focused: true });
+    } catch {
+      /* window/tab gone; not worth chasing */
+    }
+  }
 }
 
 async function reconcileAll() {
