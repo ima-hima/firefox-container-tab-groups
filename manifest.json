@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Container Corral",
-  "version": "0.2.0",
+  "version": "0.9.0",
   "description": "Group tabs by their Multi-Account Container into native tab groups, and open chosen sites in a chosen container.",
   "browser_specific_settings": {
     "gecko": {
-      "id": "container-tab-groups@ima-hima.github.io",
+      "id": "container-corral@ima-hima.github.io",
       "strict_min_version": "140.0",
       "data_collection_permissions": {
         "required": ["none"]
