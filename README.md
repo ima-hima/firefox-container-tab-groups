@@ -1,25 +1,20 @@
 # Container Tab Groups
 
-A small Firefox extension built on Firefox's native tab groups (Firefox 140+)
+A Firefox extension built on Firefox's native tab groups (Firefox 140+)
 and Multi-Account Containers:
 
 1. **Group tabs by container.** One native tab group per container. Open a tab
    in your "Work" container and it joins the "Work" tab group; open one in
-   "Shopping" and it goes to "Shopping". The group's name and colour follow the
-   container. Because a tab group can't span windows, a tab is moved to the
-   window that already holds its container's group — and if you were looking at
-   that tab, focus follows it to the new window.
+   "Shopping" and it goes to "Shopping". The group's name and color follow the
+   container. 
+1. Because a tab group can't span windows, a tab is moved to the
+   window that already holds its container's group. This prevents there being multiple groups with the same name in different windows, and keeps all tabs in a container together. 
 2. **Open sites in a container.** A list of `site → container` rules. When you
    open a matching site, the tab is reopened in the chosen container (and so
    lands in that container's group). Rules can be added from the options page or
    straight from the tab's right-click menu.
-3. **Inherit the container for new tabs** (optional). A blank new tab (Ctrl+T,
-   the "+" button) opens in whatever container the tab you were on is using.
-
-This is a from-scratch alternative to
-[Simple Tab Groups](https://github.com/Drive4ik/simple-tab-groups): rather than
-implementing its own group system, it just drives Firefox's built-in tab groups
-via the `tabGroups` WebExtension API.
+3. **Inherit the container for new tabs** (optional). A blank new tab opens in the
+   same container as the current tab.
 
 ## How it works
 
@@ -104,7 +99,7 @@ and redirect navigations for the routing feature).
 - Private windows are ignored (containers don't apply there).
 - Pinned tabs are left alone by the grouper.
 - Consolidation moves tabs between windows. A window whose last tab gets pulled
-  into another window will close — that's intentional, but worth knowing.
+  into another window will close.
 - If you manually drag a tab out of its group, the extension won't fight you
   until the next create/attach/reconcile event.
 - A container renamed while the background page is cold *and* has no cached
