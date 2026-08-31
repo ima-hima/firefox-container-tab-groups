@@ -8,6 +8,7 @@
     "start": "web-ext run",
     "lint": "web-ext lint",
     "build": "web-ext build --overwrite-dest",
+    "icons": "for s in 32 48 96 128; do npx --yes @resvg/resvg-js-cli icons/icon.svg icons/icon-$s.png --fit-width $s; done",
     "sign": "web-ext sign --channel=unlisted",
     "test": "node --test \"test/*.test.js\""
   },
