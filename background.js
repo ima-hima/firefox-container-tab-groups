@@ -72,6 +72,51 @@ async function getContainers() {
   return map;
 }
 
+/** hostname for http(s) URLs, else null. */
+function hostOf(url) {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return u.hostname;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reopen `tab` at `url` in `cookieStoreId`, then close the original.
+ * No-op if the tab is already in that container. Returns true if it acted.
+ */
+async function reopenInContainer(tab, cookieStoreId, url = tab.url) {
+  const current = tab.cookieStoreId || DEFAULT_STORE;
+  if (current === cookieStoreId || tab.incognito || !url) return false;
+
+  if (cookieStoreId !== DEFAULT_STORE) {
+    try {
+      await browser.contextualIdentities.get(cookieStoreId);
+    } catch {
+      return false;
+    }
+  }
+
+  recentlyRouted.set(url, Date.now());
+  try {
+    await browser.tabs.create({
+      url,
+      cookieStoreId,
+      windowId: tab.windowId,
+      index: tab.index + 1,
+      active: tab.active,
+    });
+    await browser.tabs.remove(tab.id);
+    return true;
+  } catch (err) {
+    console.error("[CTG] reopen failed", err);
+    recentlyRouted.delete(url);
+    return false;
+  }
+}
+
 /* ================================================================== *
  * Feature 1: container -> tab group
  * ================================================================== */
@@ -303,38 +348,9 @@ async function handleRequest(details) {
   } catch {
     return {};
   }
-  if (tab.incognito) return {};
 
-  const current = tab.cookieStoreId || DEFAULT_STORE;
-  if (current === rule.cookieStoreId) return {}; // already in the right place
-
-  // Make sure the target container still exists.
-  if (rule.cookieStoreId !== DEFAULT_STORE) {
-    try {
-      await browser.contextualIdentities.get(rule.cookieStoreId);
-    } catch {
-      return {};
-    }
-  }
-
-  recentlyRouted.set(details.url, Date.now());
-
-  try {
-    await browser.tabs.create({
-      url: details.url,
-      cookieStoreId: rule.cookieStoreId,
-      windowId: tab.windowId,
-      index: tab.index + 1,
-      active: tab.active,
-    });
-    await browser.tabs.remove(details.tabId);
-  } catch (err) {
-    console.error("[CTG] routing failed", err);
-    recentlyRouted.delete(details.url);
-    return {};
-  }
-
-  return { cancel: true };
+  const acted = await reopenInContainer(tab, rule.cookieStoreId, details.url);
+  return acted ? { cancel: true } : {};
 }
 
 browser.webRequest.onBeforeRequest.addListener(
@@ -365,6 +381,142 @@ browser.storage.onChanged.addListener((changes, area) => {
   }
 });
 
+async function persistRules(next) {
+  rules = next;
+  await browser.storage.local.set({ containerRules: rules });
+}
+
+/* ================================================================== *
+ * Feature 3: tab context menu
+ * ================================================================== */
+
+const MENU_ASSIGN = "ctg-assign";
+const MENU_UNASSIGN = "ctg-unassign";
+const MENU_REGROUP = "ctg-regroup";
+
+function domainRuleFor(host) {
+  const lower = host.toLowerCase();
+  return rules.find(
+    (r) => r.matchType === "domain" && r.pattern.trim().toLowerCase() === lower
+  );
+}
+
+async function containerEntries() {
+  const list = await browser.contextualIdentities.query({});
+  return [
+    { cookieStoreId: DEFAULT_STORE, name: "No container" },
+    ...list.map((c) => ({ cookieStoreId: c.cookieStoreId, name: c.name })),
+  ];
+}
+
+async function buildMenus() {
+  await browser.menus.removeAll();
+
+  browser.menus.create({
+    id: MENU_ASSIGN,
+    title: "Always open this site in…",
+    contexts: ["tab"],
+  });
+  for (const e of await containerEntries()) {
+    browser.menus.create({
+      id: `${MENU_ASSIGN}:${e.cookieStoreId}`,
+      parentId: MENU_ASSIGN,
+      title: e.name,
+      type: "radio",
+      checked: false,
+      contexts: ["tab"],
+    });
+  }
+
+  browser.menus.create({
+    id: MENU_UNASSIGN,
+    title: "Stop opening this site in a container",
+    contexts: ["tab"],
+    visible: false,
+  });
+
+  browser.menus.create({
+    id: "ctg-sep",
+    type: "separator",
+    contexts: ["tab"],
+  });
+  browser.menus.create({
+    id: MENU_REGROUP,
+    title: "Move tab to its container’s group",
+    contexts: ["tab"],
+  });
+}
+
+browser.menus.onShown.addListener(async (info, tab) => {
+  if (!info.contexts.includes("tab") || !tab) return;
+
+  const host = hostOf(tab.url);
+  const store = tab.cookieStoreId || DEFAULT_STORE;
+
+  try {
+    await browser.menus.update(MENU_ASSIGN, {
+      enabled: Boolean(host),
+      title: host ? `Always open “${host}” in…` : "Always open this site in…",
+    });
+
+    for (const e of await containerEntries()) {
+      await browser.menus.update(`${MENU_ASSIGN}:${e.cookieStoreId}`, {
+        checked: e.cookieStoreId === store,
+      });
+    }
+
+    await browser.menus.update(MENU_UNASSIGN, {
+      visible: Boolean(host && domainRuleFor(host)),
+      title: host
+        ? `Stop opening “${host}” in a container`
+        : "Stop opening this site in a container",
+    });
+  } catch {
+    // Menu items briefly out of sync (event page just woke, container just
+    // added/removed). buildMenus() will rebuild; nothing to do here.
+    return;
+  }
+
+  browser.menus.refresh();
+});
+
+browser.menus.onClicked.addListener((info, tab) => {
+  if (!tab) return;
+  const id = info.menuItemId;
+
+  if (id === MENU_REGROUP) {
+    serialize(() => placeTab(tab.id));
+    return;
+  }
+
+  const host = hostOf(tab.url);
+  if (!host) return;
+
+  if (id === MENU_UNASSIGN) {
+    serialize(() =>
+      persistRules(rules.filter((r) => r !== domainRuleFor(host)))
+    );
+    return;
+  }
+
+  if (typeof id === "string" && id.startsWith(`${MENU_ASSIGN}:`)) {
+    const cookieStoreId = id.slice(MENU_ASSIGN.length + 1);
+    serialize(async () => {
+      const existing = domainRuleFor(host);
+      const next = rules.filter((r) => r !== existing);
+      next.push({
+        id: crypto.randomUUID(),
+        pattern: host,
+        matchType: "domain",
+        cookieStoreId,
+        enabled: true,
+      });
+      await persistRules(next);
+      await reopenInContainer(tab, cookieStoreId);
+    });
+  }
+});
+
 /* ================================================================== *
  * Event wiring
  * ================================================================== */
@@ -375,16 +527,23 @@ browser.runtime.onStartup.addListener(() => serialize(reconcileAll));
 browser.tabs.onCreated.addListener((tab) => serialize(() => placeTab(tab.id)));
 browser.tabs.onAttached.addListener((tabId) => serialize(() => placeTab(tabId)));
 
+browser.contextualIdentities.onCreated.addListener(() =>
+  serialize(buildMenus)
+);
 browser.contextualIdentities.onUpdated.addListener(() =>
-  serialize(syncAllGroupMeta)
+  serialize(async () => {
+    await syncAllGroupMeta();
+    await buildMenus();
+  })
 );
 browser.contextualIdentities.onRemoved.addListener((info) =>
   serialize(async () => {
     const csid = info.contextualIdentity.cookieStoreId;
     const kept = rules.filter((r) => r.cookieStoreId !== csid);
     if (kept.length !== rules.length) {
-      await browser.storage.local.set({ containerRules: kept });
+      await persistRules(kept);
     }
+    await buildMenus();
     await reconcileAll();
   })
 );
@@ -407,5 +566,6 @@ browser.tabGroups.onRemoved.addListener((group) => {
 
 serialize(async () => {
   await Promise.all([loadSettings(), loadRules()]);
+  await buildMenus();
   await reconcileAll();
 });

@@ -9,7 +9,8 @@ native tab groups (Firefox 140+) and Multi-Account Containers:
    follow the container.
 2. **Open sites in a container.** A list of `site → container` rules. When you
    open a matching site, the tab is reopened in the chosen container (and so
-   lands in that container's group).
+   lands in that container's group). Rules can be added from the options page or
+   straight from the tab's right-click menu.
 
 This is a from-scratch alternative to
 [Simple Tab Groups](https://github.com/Drive4ik/simple-tab-groups): rather than
@@ -39,7 +40,18 @@ Tab groups can't span windows, so each window gets its own group per container.
 - Matching an already-correct container is left alone; **any other** container
   is moved to the assigned one.
 
-Rules are managed on the options page. Match types:
+**Tab right-click menu**
+
+- *Always open "&lt;host&gt;" in ▸* — submenu of every container (plus "No
+  container"); picking one adds a domain rule for the tab's host and reopens the
+  tab there. The tab's current container is marked.
+- *Stop opening "&lt;host&gt;" in a container* — shown only when a domain rule
+  for that host exists; removes it.
+- *Move tab to its container's group* — re-runs the grouper for that one tab
+  (useful after you've dragged a tab out of its group).
+
+**Match types (options page)**
+
 
 | Type | Matches |
 |---|---|
@@ -49,7 +61,7 @@ Rules are managed on the options page. Match types:
 
 ## Permissions
 
-`tabs`, `tabGroups`, `contextualIdentities`, `cookies`, `storage`,
+`tabs`, `tabGroups`, `contextualIdentities`, `cookies`, `storage`, `menus`,
 `webRequest`, `webRequestBlocking`, and `<all_urls>` host access (needed to see
 and redirect navigations for the routing feature).
 

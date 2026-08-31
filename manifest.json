@@ -18,6 +18,7 @@
     "contextualIdentities",
     "cookies",
     "storage",
+    "menus",
     "webRequest",
     "webRequestBlocking"
   ],
