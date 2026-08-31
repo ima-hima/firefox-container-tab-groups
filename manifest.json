@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Container Tab Groups",
   "version": "0.1.0",
-  "description": "Automatically places every tab from a Multi-Account Container into its own native Firefox tab group.",
+  "description": "Group tabs by their Multi-Account Container into native tab groups, and open chosen sites in a chosen container.",
   "browser_specific_settings": {
     "gecko": {
       "id": "container-tab-groups@ima-hima.github.io",
@@ -17,14 +17,17 @@
     "tabGroups",
     "contextualIdentities",
     "cookies",
-    "storage"
+    "storage",
+    "webRequest",
+    "webRequestBlocking"
   ],
+  "host_permissions": ["<all_urls>"],
   "background": {
     "scripts": ["background.js"]
   },
   "options_ui": {
     "page": "options.html",
-    "open_in_tab": false
+    "open_in_tab": true
   },
   "icons": {
     "48": "icons/icon.svg",

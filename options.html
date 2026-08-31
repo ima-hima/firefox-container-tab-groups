@@ -4,41 +4,134 @@
     <meta charset="utf-8" />
     <title>Container Tab Groups — Options</title>
     <style>
+      :root {
+        color-scheme: light dark;
+      }
       body {
         font: menu;
         font-size: 13px;
-        margin: 1rem;
-        max-width: 32rem;
+        margin: 1.5rem;
+        max-width: 44rem;
       }
-      label {
+      h2 {
+        font-size: 1.1em;
+        margin: 1.75rem 0 0.5rem;
+        border-bottom: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+        padding-bottom: 0.25rem;
+      }
+      label.check {
         display: flex;
         gap: 0.5rem;
         align-items: baseline;
-        margin: 0.75rem 0;
+        margin: 0.75rem 0 0.15rem;
       }
       p.hint {
-        margin: 0.15rem 0 0 1.6rem;
+        margin: 0 0 0 1.6rem;
         color: GrayText;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        margin-top: 0.5rem;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 0.35rem 0.5rem;
+        border-bottom: 1px solid
+          color-mix(in srgb, currentColor 15%, transparent);
+        vertical-align: middle;
+      }
+      th {
+        color: GrayText;
+        font-weight: normal;
+      }
+      td.pattern {
+        font-family: monospace;
+        word-break: break-all;
+      }
+      input[type="text"] {
+        width: 100%;
+        box-sizing: border-box;
+      }
+      #addRow td {
+        border-bottom: none;
+        padding-top: 0.6rem;
+      }
+      button {
+        font: inherit;
+      }
+      .remove {
+        color: inherit;
+        border: none;
+        background: none;
+        cursor: pointer;
+        opacity: 0.6;
+        font-size: 1.1em;
+        line-height: 1;
+      }
+      .remove:hover {
+        opacity: 1;
+      }
+      .empty {
+        color: GrayText;
+        font-style: italic;
       }
     </style>
   </head>
   <body>
-    <label>
+    <h2>Grouping</h2>
+    <label class="check">
       <input type="checkbox" id="groupDefaultContainer" />
       <span>Also group tabs with no container</span>
     </label>
     <p class="hint">
       Puts tabs opened outside any Multi-Account Container into a
-      "No Container" group.
+      &ldquo;No Container&rdquo; group.
     </p>
 
-    <label>
+    <label class="check">
       <input type="checkbox" id="syncTitleAndColor" />
       <span>Keep group name and colour matched to the container</span>
     </label>
     <p class="hint">
       When off, groups are created once and then left alone for you to rename.
     </p>
+
+    <h2>Open sites in a container</h2>
+    <p class="hint" style="margin-left: 0">
+      When you open a matching site, the tab is reopened in the chosen
+      container (and therefore lands in that container&rsquo;s group). Matching
+      an already-correct container is left alone; any other container is moved.
+    </p>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 40%">Pattern</th>
+          <th style="width: 22%">Match</th>
+          <th style="width: 26%">Container</th>
+          <th style="width: 6%">On</th>
+          <th style="width: 6%"></th>
+        </tr>
+      </thead>
+      <tbody id="rules"></tbody>
+      <tfoot>
+        <tr id="addRow">
+          <td><input type="text" id="newPattern" placeholder="example.com" /></td>
+          <td>
+            <select id="newMatchType">
+              <option value="domain">Domain + subdomains</option>
+              <option value="exact">Exact host</option>
+              <option value="glob">URL glob (*)</option>
+            </select>
+          </td>
+          <td><select id="newContainer"></select></td>
+          <td></td>
+          <td><button id="addRule" type="button">Add</button></td>
+        </tr>
+      </tfoot>
+    </table>
 
     <script src="options.js"></script>
   </body>

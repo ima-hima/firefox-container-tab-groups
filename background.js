@@ -4,9 +4,15 @@
  * Container Tab Groups
  * ====================
  *
- * Keeps exactly one native Firefox tab group per container, per window.
- * Whenever a tab is created in — or moved into — a window, it is placed in
- * the tab group that corresponds to its contextual identity (cookieStoreId).
+ * Two features, both built on Firefox's native tab groups + containers:
+ *
+ *  1. Grouping     - keeps exactly one native tab group per container, per
+ *                    window. Tabs created in / moved into a window are placed
+ *                    in the group for their contextual identity.
+ *
+ *  2. Site routing - a list of "open this site in that container" rules. When a
+ *                    top-level navigation matches a rule and the tab is in the
+ *                    wrong container, the tab is reopened in the right one.
  *
  * Firefox tab groups cannot span windows, but containers are global, so the
  * unit of grouping is (window, container).
@@ -55,9 +61,9 @@ function serialize(task) {
   return queue;
 }
 
-/* ------------------------------------------------------------------ *
- * Helpers
- * ------------------------------------------------------------------ */
+/* ================================================================== *
+ * Shared helpers
+ * ================================================================== */
 
 async function getContainers() {
   const list = await browser.contextualIdentities.query({});
@@ -65,6 +71,10 @@ async function getContainers() {
   for (const c of list) map.set(c.cookieStoreId, c);
   return map;
 }
+
+/* ================================================================== *
+ * Feature 1: container -> tab group
+ * ================================================================== */
 
 /** Target group title/colour for a given cookieStoreId, or null to skip. */
 function describe(cookieStoreId, containers) {
@@ -132,10 +142,6 @@ async function applyMeta(groupId, desc) {
     /* group vanished between calls; next reconcile will fix it */
   }
 }
-
-/* ------------------------------------------------------------------ *
- * Core operations
- * ------------------------------------------------------------------ */
 
 async function placeTab(tabId) {
   let tab;
@@ -221,9 +227,125 @@ async function syncAllGroupMeta() {
   }
 }
 
-/* ------------------------------------------------------------------ *
- * Settings
- * ------------------------------------------------------------------ */
+/* ================================================================== *
+ * Feature 2: site -> container routing
+ * ================================================================== */
+
+// [{ id, pattern, matchType: "domain"|"exact"|"glob", cookieStoreId, enabled }]
+let rules = [];
+
+async function loadRules() {
+  const stored = await browser.storage.local.get("containerRules");
+  rules = Array.isArray(stored.containerRules) ? stored.containerRules : [];
+}
+
+function escapeRegExp(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function globToRegExp(glob) {
+  const body = glob.split("*").map(escapeRegExp).join(".*");
+  return new RegExp("^" + body + "$", "i");
+}
+
+function hostMatches(host, rule) {
+  const p = rule.pattern.trim().toLowerCase().replace(/^\*\./, "");
+  const h = host.toLowerCase();
+  if (rule.matchType === "exact") return h === p;
+  return h === p || h.endsWith("." + p); // "domain": host + subdomains
+}
+
+/** Returns the first enabled rule that matches `url`, or null. */
+function matchRule(url) {
+  let u;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+
+  for (const rule of rules) {
+    if (rule.enabled === false || !rule.pattern) continue;
+    if (rule.matchType === "glob") {
+      if (globToRegExp(rule.pattern).test(url)) return rule;
+    } else if (hostMatches(u.hostname, rule)) {
+      return rule;
+    }
+  }
+  return null;
+}
+
+// Guard against re-handling the tab we just opened for a given navigation.
+const recentlyRouted = new Map(); // url -> timestamp
+const ROUTE_TTL_MS = 4000;
+
+function wasJustRouted(url) {
+  const t = recentlyRouted.get(url);
+  if (t == null) return false;
+  if (Date.now() - t > ROUTE_TTL_MS) {
+    recentlyRouted.delete(url);
+    return false;
+  }
+  return true;
+}
+
+async function handleRequest(details) {
+  if (details.tabId < 0 || details.frameId !== 0) return {};
+
+  const rule = matchRule(details.url);
+  if (!rule) return {};
+  if (wasJustRouted(details.url)) return {};
+
+  let tab;
+  try {
+    tab = await browser.tabs.get(details.tabId);
+  } catch {
+    return {};
+  }
+  if (tab.incognito) return {};
+
+  const current = tab.cookieStoreId || DEFAULT_STORE;
+  if (current === rule.cookieStoreId) return {}; // already in the right place
+
+  // Make sure the target container still exists.
+  if (rule.cookieStoreId !== DEFAULT_STORE) {
+    try {
+      await browser.contextualIdentities.get(rule.cookieStoreId);
+    } catch {
+      return {};
+    }
+  }
+
+  recentlyRouted.set(details.url, Date.now());
+
+  try {
+    await browser.tabs.create({
+      url: details.url,
+      cookieStoreId: rule.cookieStoreId,
+      windowId: tab.windowId,
+      index: tab.index + 1,
+      active: tab.active,
+    });
+    await browser.tabs.remove(details.tabId);
+  } catch (err) {
+    console.error("[CTG] routing failed", err);
+    recentlyRouted.delete(details.url);
+    return {};
+  }
+
+  return { cancel: true };
+}
+
+browser.webRequest.onBeforeRequest.addListener(
+  handleRequest,
+  { urls: ["http://*/*", "https://*/*"], types: ["main_frame"] },
+  ["blocking"]
+);
+
+/* ================================================================== *
+ * Settings + rules storage
+ * ================================================================== */
 
 async function loadSettings() {
   const stored = await browser.storage.local.get("settings");
@@ -231,14 +353,21 @@ async function loadSettings() {
 }
 
 browser.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local" || !changes.settings) return;
-  settings = { ...DEFAULT_SETTINGS, ...(changes.settings.newValue || {}) };
-  serialize(reconcileAll);
+  if (area !== "local") return;
+  if (changes.settings) {
+    settings = { ...DEFAULT_SETTINGS, ...(changes.settings.newValue || {}) };
+    serialize(reconcileAll);
+  }
+  if (changes.containerRules) {
+    rules = Array.isArray(changes.containerRules.newValue)
+      ? changes.containerRules.newValue
+      : [];
+  }
 });
 
-/* ------------------------------------------------------------------ *
+/* ================================================================== *
  * Event wiring
- * ------------------------------------------------------------------ */
+ * ================================================================== */
 
 browser.runtime.onInstalled.addListener(() => serialize(reconcileAll));
 browser.runtime.onStartup.addListener(() => serialize(reconcileAll));
@@ -249,8 +378,15 @@ browser.tabs.onAttached.addListener((tabId) => serialize(() => placeTab(tabId)))
 browser.contextualIdentities.onUpdated.addListener(() =>
   serialize(syncAllGroupMeta)
 );
-browser.contextualIdentities.onRemoved.addListener(() =>
-  serialize(reconcileAll)
+browser.contextualIdentities.onRemoved.addListener((info) =>
+  serialize(async () => {
+    const csid = info.contextualIdentity.cookieStoreId;
+    const kept = rules.filter((r) => r.cookieStoreId !== csid);
+    if (kept.length !== rules.length) {
+      await browser.storage.local.set({ containerRules: kept });
+    }
+    await reconcileAll();
+  })
 );
 
 browser.windows.onRemoved.addListener((windowId) => {
@@ -265,11 +401,11 @@ browser.tabGroups.onRemoved.addListener((group) => {
   }
 });
 
-/* ------------------------------------------------------------------ *
+/* ================================================================== *
  * Boot
- * ------------------------------------------------------------------ */
+ * ================================================================== */
 
 serialize(async () => {
-  await loadSettings();
+  await Promise.all([loadSettings(), loadRules()]);
   await reconcileAll();
 });
