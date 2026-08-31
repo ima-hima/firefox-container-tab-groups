@@ -1,6 +1,6 @@
 {
-  "name": "container-tab-groups",
-  "version": "0.1.0",
+  "name": "container-corral",
+  "version": "0.2.0",
   "description": "Group tabs by their Multi-Account Container into native tab groups, and open chosen sites in a chosen container.",
   "private": true,
   "type": "module",
@@ -21,6 +21,7 @@
       "package-lock.json",
       "node_modules",
       "web-ext-artifacts",
+      ".amo-upload-uuid",
       "README.md",
       ".git",
       ".gitignore",

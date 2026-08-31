@@ -1,6 +1,6 @@
 /**
- * Container Tab Groups
- * ====================
+ * Container Corral
+ * ================
  *
  * Two features, both built on Firefox's native tab groups + containers:
  *

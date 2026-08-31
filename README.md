@@ -1,7 +1,7 @@
-# Container Tab Groups
+# Container Corral
 
-A Firefox extension built on Firefox's native tab groups (Firefox 140+)
-and Multi-Account Containers:
+A Firefox extension that corrals your Multi-Account Container tabs into
+Firefox's native tab groups (Firefox 140+):
 
 1. **Group tabs by container.** One native tab group per container. Open a tab
    in your "Work" container and it joins the "Work" tab group; open one in
@@ -25,7 +25,7 @@ so pick one of these.
 
 1. Clone the repo:
    ```bash
-   git clone https://github.com/ima-hima/firefox-container-tab-groups
+   git clone https://github.com/ima-hima/container-corral
    ```
 2. In Firefox, open `about:debugging#/runtime/this-firefox`.
 3. Click **Load Temporary Add-on…** and choose `manifest.json` from the clone.
