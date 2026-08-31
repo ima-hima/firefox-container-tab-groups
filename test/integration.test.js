@@ -259,6 +259,65 @@ test("new-tab inheritance: a tab that navigates on its own (Open and Fill) is le
   assert.equal(still.cookieStoreId, "firefox-default");
 });
 
+test("new-tab inheritance event flow: a finished blank tab is inherited", async () => {
+  const h = await loadBackground({
+    containers: [WORK],
+    storageLocal: { settings: { newTabInheritsContainer: true } },
+  });
+  const cur = h.addTab({ windowId: 1, cookieStoreId: "c-work", active: true });
+  await h.bg.trackActive(1, cur.id);
+
+  const blank = h.addTab({
+    windowId: 1,
+    cookieStoreId: "firefox-default",
+    url: "about:newtab",
+    active: true,
+  });
+  h.emit("tabs.onCreated", blank);
+  h.emit("tabs.onUpdated", blank.id, { status: "complete" }, {
+    ...blank,
+    url: "about:newtab",
+  });
+  await h.bg.settled();
+
+  assert.ok(!h.state.tabs.some((x) => x.id === blank.id), "blank tab replaced");
+  assert.deepEqual(
+    h.state.tabs.map((x) => x.cookieStoreId).sort(),
+    ["c-work", "c-work"]
+  );
+});
+
+test("new-tab inheritance event flow: a tab that commits a URL is not touched", async () => {
+  const h = await loadBackground({
+    containers: [WORK],
+    storageLocal: { settings: { newTabInheritsContainer: true } },
+  });
+  const cur = h.addTab({ windowId: 1, cookieStoreId: "c-work", active: true });
+  await h.bg.trackActive(1, cur.id);
+
+  const blank = h.addTab({
+    windowId: 1,
+    cookieStoreId: "firefox-default",
+    url: "about:blank",
+    active: true,
+  });
+  h.emit("tabs.onCreated", blank);
+  // 1Password's tabs.create({url}) commits its real URL a beat later:
+  h.emit("tabs.onUpdated", blank.id, { url: "https://vault.example.com/" }, {
+    ...blank,
+    url: "https://vault.example.com/",
+  });
+  h.emit("tabs.onUpdated", blank.id, { status: "complete" }, {
+    ...blank,
+    url: "https://vault.example.com/",
+  });
+  await h.bg.settled();
+
+  const still = h.state.tabs.find((x) => x.id === blank.id);
+  assert.ok(still, "the tab survives");
+  assert.equal(still.cookieStoreId, "firefox-default");
+});
+
 test("container rename propagates to the existing group", async () => {
   const h = await loadBackground({ containers: [WORK] });
   const t = h.addTab({ windowId: 1, cookieStoreId: "c-work" });

@@ -103,11 +103,13 @@ would empty Firefox's last remaining window.
 **New-tab container inheritance** (off by default)
 
 - `tabs.onActivated` keeps a `windowId → active cookieStoreId` map.
-- On `tabs.onCreated` for a blank, opener-less, default-container tab, the check
-  is deferred ~400 ms and the tab re-read. A tab created via `tabs.create({url})`
-  — e.g. 1Password's "Open and Fill" — reports `about:blank` at creation but has
-  navigated by then, so it is left alone. Only a still-blank tab is re-created in
-  the window's active container.
+- A new default-container tab is tracked, then classified from `tabs.onUpdated`:
+  if it commits an `http(s)` URL it navigated on its own — Firefox reports
+  `about:blank` at `onCreated` even for `tabs.create({url})` (e.g. 1Password's
+  "Open and Fill"), then navigates a beat later — and is left alone; if it
+  finishes loading still on a blank page it's a genuine new tab and is re-created
+  in the window's active container. A 10 s fallback stops tracking if no update
+  ever arrives.
 - Links are untouched (Firefox already opens them in their opener's container).
 
 **Tab right-click menu**

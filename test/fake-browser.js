@@ -7,7 +7,18 @@
  */
 
 const noop = () => {};
-const listener = () => ({ addListener: noop, removeListener: noop });
+const listener = () => {
+  const fns = [];
+  return {
+    addListener: (fn) => fns.push(fn),
+    removeListener: (fn) => {
+      const i = fns.indexOf(fn);
+      if (i >= 0) fns.splice(i, 1);
+    },
+    hasListener: (fn) => fns.includes(fn),
+    _fns: fns,
+  };
+};
 
 export function makeFakeBrowser(init = {}) {
   const state = {
@@ -335,6 +346,12 @@ export function makeFakeBrowser(init = {}) {
     state,
     // test helpers
     addTab: (p) => addTab(p),
+    /** Fire a browser event, e.g. emit("tabs.onUpdated", tabId, changeInfo, tab). */
+    emit: (path, ...args) => {
+      const ev = path.split(".").reduce((o, k) => o?.[k], browser);
+      if (!ev || !ev._fns) throw new Error(`no such event: ${path}`);
+      for (const fn of [...ev._fns]) fn(...args);
+    },
     setContainer: (c) =>
       state.containers.set(c.cookieStoreId, { color: "blue", ...c }),
     snapshotTabs: () =>

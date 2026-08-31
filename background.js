@@ -727,22 +727,51 @@ browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
   trackActive(windowId, tabId);
 });
 
-const INHERIT_DELAY_MS = 400;
+// New default-container tabs we might re-open in the active container. We hold
+// off until tabs.onUpdated tells us what the tab is actually doing: Firefox
+// reports about:blank at onCreated even for tabs.create({ url }) (e.g.
+// 1Password's "Open and Fill"), and re-creating such a tab would kill the
+// navigation before it starts. tabId -> inheritFrom.
+const inheritCandidates = new Map();
+const dropInheritCandidate = (tabId) => inheritCandidates.delete(tabId);
 
 browser.tabs.onCreated.addListener((tab) => {
-  // Read the pre-existing active container synchronously, before onActivated
-  // for this new tab can overwrite it.
+  // Capture the active container synchronously, before onActivated for this new
+  // tab overwrites it.
   const inheritFrom = activeStore.get(tab.windowId);
-  if (settings.newTabInheritsContainer) {
-    // A tab opened via tabs.create({ url }) reports about:blank here and
-    // navigates a moment later. Wait, then re-check the tab before touching it.
-    setTimeout(
-      () => serialize(() => maybeInheritContainer(tab.id, inheritFrom)),
-      INHERIT_DELAY_MS
-    ).unref?.();
+  if (
+    settings.newTabInheritsContainer &&
+    inheritFrom &&
+    inheritFrom !== DEFAULT_STORE
+  ) {
+    inheritCandidates.set(tab.id, inheritFrom);
+    // Safety net if no onUpdated ever arrives for this tab.
+    setTimeout(() => dropInheritCandidate(tab.id), 10000).unref?.();
   }
   onTabSettled(tab.id);
 });
+
+browser.tabs.onUpdated.addListener(
+  (tabId, changeInfo, tab) => {
+    const inheritFrom = inheritCandidates.get(tabId);
+    if (inheritFrom === undefined) return;
+
+    const url = changeInfo.url ?? tab?.url ?? "";
+    if (/^(https?|ftp|file):/i.test(url)) {
+      // It navigated on its own — not a blank tab the user opened. Leave it.
+      dropInheritCandidate(tabId);
+      return;
+    }
+    if (changeInfo.status === "complete") {
+      // Finished loading and still on a blank page → a genuine new tab.
+      dropInheritCandidate(tabId);
+      serialize(() => maybeInheritContainer(tabId, inheritFrom));
+    }
+  },
+  { properties: ["status", "url"] }
+);
+
+browser.tabs.onRemoved.addListener((tabId) => dropInheritCandidate(tabId));
 browser.tabs.onAttached.addListener((tabId) => onTabSettled(tabId));
 
 browser.contextualIdentities.onCreated.addListener(() =>
@@ -812,3 +841,5 @@ export {
 export function __setSettleUntil(t) {
   settleUntil = t;
 }
+/** Resolves when the current serialize() queue has drained. */
+export const settled = () => queue;
