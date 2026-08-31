@@ -27,6 +27,11 @@ via the `tabGroups` WebExtension API.
 - Group title/colour are synced from the container (`tabGroups.update()`), and
   re-synced when a container is renamed or recoloured.
 - On startup / install / container removal, all windows are reconciled.
+- An existing group with the container's name is always reused rather than
+  creating a second one. If duplicates already exist (e.g. from a session-restore
+  race), reconcile merges their tabs into the oldest group and Firefox drops the
+  now-empty ones. During session restore, per-tab handling is paused for ~12 s so
+  Firefox finishes re-creating groups before the extension touches them.
 
 Tab groups can't span windows, so each window gets its own group per container.
 
